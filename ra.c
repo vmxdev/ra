@@ -5,6 +5,12 @@
 #include <limits.h>
 #include <float.h>
 #include <stdlib.h>
+#include <string.h>
+#include <getopt.h>
+
+#include "inih/ini.h"
+
+#define PLANET_NAME_MAX 128
 
 struct vector
 {
@@ -13,6 +19,8 @@ struct vector
 
 struct body
 {
+	char name[PLANET_NAME_MAX];
+
 	struct vector c; /* coordinates */
 	struct vector v; /* velocity */
 
@@ -115,12 +123,12 @@ calc_next_step(struct nbody *nb, size_t i, double dt)
 
 
 static void
-nbody_nextstep(struct nbody *nb)
+nbody_nextstep(struct nbody *nb, double delta)
 {
 	size_t i;
 
 	for (i=0; i<nb->n; i++) {
-		calc_next_step(nb, i, 1.0);
+		calc_next_step(nb, i, delta);
 	}
 
 	for (i=0; i<nb->n; i++) {
@@ -129,54 +137,169 @@ nbody_nextstep(struct nbody *nb)
 	}
 }
 
+static void
+ra_ini_key(struct body *b, const char *name, const char *value)
+{
+#define KEY(STR, V)                    \
+	if (strcmp(name, STR) == 0) { \
+		V = atof(value);  \
+		return;                \
+	}
+	KEY("cx", b->c.x);
+	KEY("cy", b->c.y);
+	KEY("cz", b->c.z);
+
+	KEY("vx", b->v.x);
+	KEY("vy", b->v.y);
+	KEY("vz", b->v.z);
+
+	KEY("M", b->M);
+#undef KEY
+}
+
+static int
+ra_ini_handler(void *user, const char *section, const char *name,
+		const char *value)
+{
+	struct nbody *nb = (struct nbody *)user;
+	const char *planet_pfx = "planet_";
+	size_t i;
+
+	if (strncmp(section, planet_pfx, strlen(planet_pfx)) == 0) {
+		int found = 0;
+		const char *planet_name = section + strlen(planet_pfx);
+
+		for (i=0; i<nb->n; i++) {
+			if (strcmp(nb->b[i].name, planet_name) == 0) {
+				/* existing planet */
+				found = 1;
+				break;
+			}
+		}
+		if (!found) {
+			struct body *tmp;
+
+			tmp = realloc(nb->b, sizeof(struct body)*(nb->n + 1));
+			if (!tmp) {
+				free(nb->b);
+				fprintf(stderr, "Insufficient memory\n");
+				return 0;
+			}
+			nb->b = tmp;
+			strcpy(nb->b[i].name, planet_name);
+			nb->n++;
+		}
+		ra_ini_key(&nb->b[i], name, value);
+	} else {
+		fprintf(stderr, "Unknown section '%s'\n", section);
+	}
+
+	return 1;
+}
+
+static void
+usage(char *progname, double duration, double delta, double samplerate)
+{
+	fprintf(stderr, "Usage: %s [-d duration] [-t delta] [-r samplerate] planets.ini\n",
+		progname);
+	fprintf(stderr, " where:\n");
+	fprintf(stderr, "  -d | --duration  time (in seconds) of simulation, default %f\n",
+		duration);
+	fprintf(stderr, "  -t | --delta  step (in seconds) between simulation steps, default %f\n",
+		delta);
+	fprintf(stderr, "  -r | --samplerate  results will be printed each samplerate second, default %f\n",
+		samplerate);
+	fprintf(stderr, "  planets.ini  INI-file with planets description\n");
+}
 
 
 int
-main()
+main(int argc, char *argv[])
 {
 	struct nbody solar_system;
-	size_t i;
+	char *ini_file = NULL;
 
-	solar_system.n = 2;
-	solar_system.b = malloc(solar_system.n * sizeof(struct body));
+	/* parameters with some reasonable defaults */
+	double duration = 60.0 * 60.0 * 24.0 * 365.256; /* one year */
+	double delta = 1.0; /* one second */
+	double samplerate = 60.0 * 60.0 * 24.0; /* one day */
+
+	double passed = 0.0;
+	uint64_t prev_sr = 1;
+
+	/* command-line options */
+	while (1) {
+		int c;
+
+		int option_index = 0;
+		static struct option long_options[] = {
+			{"duration",    required_argument, 0, 'd'},
+			{"delta",       required_argument, 0, 't'},
+			{"samplerate",  required_argument, 0, 'r'},
+			{0,             0,                 0,  0 }
+		};
+
+		c = getopt_long(argc, argv, "d:r:t:",
+			long_options, &option_index);
+		if (c == -1) {
+			break;
+		} else if (c == 0) {
+			c = long_options[option_index].val;
+		}
+
+		switch (c) {
+			case 'd':
+				duration = atof(optarg);
+				break;
+			case 't':
+				delta = atof(optarg);
+				break;
+			case 'r':
+				samplerate = atof(optarg);
+				break;
+		}
+	}
+
+	if (optind != (argc - 1)) {
+		usage(argv[0], duration, delta, samplerate);
+		return EXIT_FAILURE;
+	}
+
+	memset(&solar_system, 0, sizeof(struct nbody));
+
+	/* parse INI file with planets description */
+	ini_file = argv[optind];
+	if (ini_parse(ini_file, &ra_ini_handler, &solar_system) < 0) {
+		fprintf(stderr, "Can't parse '%s'\n", ini_file);
+		return EXIT_FAILURE;
+	}
+
 	solar_system.bnext = malloc(solar_system.n * sizeof(struct body));
+	if (!solar_system.bnext) {
+		fprintf(stderr, "Insufficient memory\n");
+		return EXIT_FAILURE;
+	}
 
-	solar_system.b[0].c.x = 0.0;
-	solar_system.b[0].c.y = 0.0;
-	solar_system.b[0].c.z = 0.0;
+	while (passed <= duration) {
+		nbody_nextstep(&solar_system, delta);
 
-	solar_system.b[0].v.x = 0.0;
-	solar_system.b[0].v.y = 0.0;
-	solar_system.b[0].v.z = 0.0;
-	solar_system.b[0].M = 1.32712440018e20;
+		if (prev_sr != (uint64_t)(passed / samplerate)) {
+			size_t i;
 
-	solar_system.b[1].c.x = 1.496e11;
-	solar_system.b[1].c.y = 0.0;
-	solar_system.b[1].c.z = 0.0;
+			printf("%lu\n", (unsigned long)prev_sr);
+			for (i=0; i<solar_system.n; i++) {
+				printf("%s: x = %f, y = %f, z = %f\n",
+					solar_system.b[i].name,
+					solar_system.b[i].c.x,
+					solar_system.b[i].c.y,
+					solar_system.b[i].c.z);
+			}
+			printf("\n");
 
-	solar_system.b[1].v.x = 0.0;
-	solar_system.b[1].v.y = 29722.0;
-	solar_system.b[1].v.z = 0.0;
-	solar_system.b[1].M = 3.986004418e14;
-
-	for (i=0; i<60*60*24*365; i++) {
-		size_t j;
-		const size_t samplerate = 60*60*24;
-
-		nbody_nextstep(&solar_system);
-
-		if (i % samplerate) {
-			continue;
+			prev_sr = (uint64_t)(passed / samplerate);
 		}
 
-		for (j=0; j<solar_system.n; j++) {
-			printf("%u: %f/%f/%f\n",
-				i / samplerate,
-				solar_system.b[j].c.x,
-				solar_system.b[j].c.y,
-				solar_system.b[j].c.z);
-		}
-		printf("\n");
+		passed += delta;
 	}
 
 	free(solar_system.bnext);
