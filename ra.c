@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <errno.h>
 
 #include "inih/ini.h"
 
@@ -24,7 +25,8 @@ struct body
 	struct vector c; /* coordinates */
 	struct vector v; /* velocity */
 
-	double M;
+	double M;        /* standard gravitational parameter */
+
 };
 
 struct nbody
@@ -141,8 +143,8 @@ static void
 ra_ini_key(struct body *b, const char *name, const char *value)
 {
 #define KEY(STR, V)                    \
-	if (strcmp(name, STR) == 0) { \
-		V = atof(value);  \
+	if (strcmp(name, STR) == 0) {  \
+		V = atof(value);       \
 		return;                \
 	}
 	KEY("cx", b->c.x);
@@ -200,15 +202,16 @@ ra_ini_handler(void *user, const char *section, const char *name,
 static void
 usage(char *progname, double duration, double delta, double samplerate)
 {
-	fprintf(stderr, "Usage: %s [-d duration] [-t delta] [-r samplerate] planets.ini\n",
+	fprintf(stderr, "Usage: %s [-d duration] [-t delta] [-r samplerate] -o out.dat planets.ini\n",
 		progname);
 	fprintf(stderr, " where:\n");
 	fprintf(stderr, "  -d | --duration  time (in seconds) of simulation, default %f\n",
 		duration);
 	fprintf(stderr, "  -t | --delta  step (in seconds) between simulation steps, default %f\n",
 		delta);
-	fprintf(stderr, "  -r | --samplerate  results will be printed each samplerate second, default %f\n",
+	fprintf(stderr, "  -r | --samplerate  results will be stored each samplerate second, default %f\n",
 		samplerate);
+	fprintf(stderr, "  -o | --output  file with calculated coordinates\n");
 	fprintf(stderr, "  planets.ini  INI-file with planets description\n");
 }
 
@@ -217,7 +220,8 @@ int
 main(int argc, char *argv[])
 {
 	struct nbody solar_system;
-	char *ini_file = NULL;
+	char *ini_file = NULL, *out_file = NULL;
+	FILE *out;
 
 	/* parameters with some reasonable defaults */
 	double duration = 60.0 * 60.0 * 24.0 * 365.256; /* one year */
@@ -235,11 +239,12 @@ main(int argc, char *argv[])
 		static struct option long_options[] = {
 			{"duration",    required_argument, 0, 'd'},
 			{"delta",       required_argument, 0, 't'},
+			{"output",      required_argument, 0, 'o'},
 			{"samplerate",  required_argument, 0, 'r'},
 			{0,             0,                 0,  0 }
 		};
 
-		c = getopt_long(argc, argv, "d:r:t:",
+		c = getopt_long(argc, argv, "d:o:r:t:",
 			long_options, &option_index);
 		if (c == -1) {
 			break;
@@ -251,6 +256,9 @@ main(int argc, char *argv[])
 			case 'd':
 				duration = atof(optarg);
 				break;
+			case 'o':
+				out_file = optarg;
+				break;
 			case 't':
 				delta = atof(optarg);
 				break;
@@ -260,8 +268,15 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (optind != (argc - 1)) {
+	if ((optind != (argc - 1)) || (!out_file)) {
+		/* missing planets.ini or output file */
 		usage(argv[0], duration, delta, samplerate);
+		return EXIT_FAILURE;
+	}
+
+	out = fopen(out_file, "w");
+	if (!out) {
+		fprintf(stderr, "Can't open %s: %s\n", out_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -286,21 +301,19 @@ main(int argc, char *argv[])
 		if (prev_sr != (uint64_t)(passed / samplerate)) {
 			size_t i;
 
-			printf("%lu\n", (unsigned long)prev_sr);
 			for (i=0; i<solar_system.n; i++) {
-				printf("%s: x = %f, y = %f, z = %f\n",
-					solar_system.b[i].name,
-					solar_system.b[i].c.x,
-					solar_system.b[i].c.y,
-					solar_system.b[i].c.z);
+				fwrite(&solar_system.b[i].c.x, 1, sizeof(double), out);
+				fwrite(&solar_system.b[i].c.y, 1, sizeof(double), out);
+				fwrite(&solar_system.b[i].c.z, 1, sizeof(double), out);
 			}
-			printf("\n");
 
 			prev_sr = (uint64_t)(passed / samplerate);
 		}
 
 		passed += delta;
 	}
+
+	fclose(out);
 
 	free(solar_system.bnext);
 	free(solar_system.b);
