@@ -1,8 +1,8 @@
 <?php
 
 
-$PATH_TO_INI  = "/home/vm/ra/planets.ini";
-$PATH_TO_DATA = "/home/vm/ra/data.dat";
+$PATH_TO_INI  = "/var/lib/ra/planets.ini";
+$PATH_TO_DATA = "/var/lib/ra/data.dat";
 
 function err($e) {
 	$r = array("status" => $e);
