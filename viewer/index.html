@@ -11,6 +11,7 @@
 	height: 70%;
   }
   #timeline {
+	margin-right: 10px;
 	margin-bottom: 10px;
   }
   #speed-parent {
@@ -30,7 +31,6 @@
  <script>
 	var camera, scene, renderer, controls;
 	var planets, mesh;
-	var simtime = 0;
 	var speed = 10;
 	var nrecords;
 	var SCALE = 1000000000;
@@ -79,19 +79,20 @@
 	}
 
 	function update() {
-		simtime++;
-		if (simtime >= nrecords) {
-			simtime = 0;
-		}
-		$.getJSON("planets.php", { time: simtime } )
+		$.getJSON("planets.php", { time:  $("#timeline").slider("option", "value") })
 			.done(function( data ) {
-				$("#timeline").slider('value', simtime);
 				for (i=0; i<planets.length; i++) {
 					planets[i].position.x = data.planets[i].x / SCALE;
 					planets[i].position.y = data.planets[i].y / SCALE;
 					planets[i].position.z = data.planets[i].z / SCALE;
 				}
 		});
+	 	var tm = $("#timeline").slider("option", "value");
+		if (tm < ($("#timeline").slider("option", "max") - 1)) {
+			$("#timeline").slider("option", "value", tm + 1);
+		} else {
+			$("#timeline").slider("option", "value", 0);
+		}
 		setTimeout(update, DELAY);
 	}
 
@@ -114,9 +115,6 @@
 				init(w, h, data.planets);
 				animate();
 				setTimeout(update, DELAY);
-		});
-		$("#timeline").on("slidechange", function(event, ui) {
-			simtime = $(this).slider('value');
 		});
 		$("#speed").on("slidechange", function(event, ui) {
 		});
